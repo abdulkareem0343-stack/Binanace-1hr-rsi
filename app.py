@@ -3,10 +3,10 @@ import ccxt
 import pandas as pd
 
 # Page Configuration
-st.set_page_config(page_title="Binance RSI Scanner", layout="wide")
-st.title("📊 Binance 1-Hour RSI Scanner (45 - 60)")
+st.set_page_config(page_title="Bitget RSI Scanner", layout="wide")
+st.title("📊 Bitget 1-Hour RSI Scanner (45 - 60)")
 
-# Custom RSI Function
+# Custom RSI Calculation Function
 def calculate_rsi(df, period=14):
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -17,27 +17,19 @@ def calculate_rsi(df, period=14):
 
 @st.cache_data(ttl=300)
 def scan_markets():
-    # Streamlit Cloud IP restriction fix
-    exchange = ccxt.binance({
+    # Bitget Exchange Initialization
+    exchange = ccxt.bitget({
         'enableRateLimit': True,
-        'urls': {
-            'api': {
-                'public': 'https://api1.binance.com/api/v3',
-            }
-        },
-        'headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        }
     })
     
     try:
         markets = exchange.load_markets()
     except Exception as e:
-        st.error(f"Binance connection failed: {e}")
+        st.error(f"Bitget connection failed: {e}")
         return pd.DataFrame()
     
-    # Top 40 USDT Pairs scan karein
-    usdt_pairs = [symbol for symbol in markets if symbol.endswith('/USDT') and markets[symbol]['spot']][:40]
+    # Sirf Bitget Spot USDT pairs filter karein (Top 50 Pairs)
+    usdt_pairs = [symbol for symbol in markets if symbol.endswith('/USDT') and markets[symbol].get('spot', False)][:50]
     
     results = []
     progress_bar = st.progress(0)
@@ -66,13 +58,13 @@ def scan_markets():
     return pd.DataFrame(results)
 
 if st.button('🚀 Start Scan'):
-    with st.spinner('Fetching data from Binance...'):
+    with st.spinner('Scanning Bitget Spot Markets...'):
         df_results = scan_markets()
         
         if not df_results.empty:
             st.success(f"{len(df_results)} Coins found in 45-60 RSI range!")
             st.dataframe(df_results, use_container_width=True)
         else:
-            st.warning("No coins found matching the RSI range right now.")
+            st.warning("No coins found in 45-60 RSI range right now.")
 else:
-    st.info("Click 'Start Scan' to begin scanning.")
+    st.info("Click 'Start Scan' to begin scanning Bitget markets.")
