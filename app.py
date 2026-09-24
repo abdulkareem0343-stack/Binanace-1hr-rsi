@@ -1,70 +1,108 @@
-import streamlit as st
 import ccxt
 import pandas as pd
+import pandas_ta as ta
+import time
 
-# Page Configuration
-st.set_page_config(page_title="Bitget RSI Scanner", layout="wide")
-st.title("📊 Bitget 1-Hour RSI Scanner (45 - 60)")
+# --- CONFIGURATION ---
+EXCHANGES = ['binance', 'bybit', 'okx', 'kucoin', 'mexc'] 
+TIMEFRAME = '5m'
+EMA_FAST = 14
+EMA_SLOW = 100
+GAP_THRESHOLD_PERCENT = 0.3  # 0.3% gap threshold
+TOP_N_PAIRS = 15             # Top 15 USDT pairs per exchange
 
-# Custom RSI Calculation Function
-def calculate_rsi(df, period=14):
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
-    return df
-
-@st.cache_data(ttl=300)
-def scan_markets():
-    # Bitget Exchange Initialization
-    exchange = ccxt.bitget({
-        'enableRateLimit': True,
-    })
-    
+def get_exchange_instance(exchange_id):
+    """CCXT Exchange Instance with Rate-Limiting Enabled"""
     try:
-        markets = exchange.load_markets()
+        exchange_class = getattr(ccxt, exchange_id)
+        return exchange_class({
+            'enableRateLimit': True,
+            'timeout': 10000
+        })
     except Exception as e:
-        st.error(f"Bitget connection failed: {e}")
-        return pd.DataFrame()
-    
-    # Sirf Bitget Spot USDT pairs filter karein (Top 50 Pairs)
-    usdt_pairs = [symbol for symbol in markets if symbol.endswith('/USDT') and markets[symbol].get('spot', False)][:50]
-    
-    results = []
-    progress_bar = st.progress(0)
-    
-    for idx, symbol in enumerate(usdt_pairs):
-        try:
-            ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50)
-            if ohlcv and len(ohlcv) >= 20:
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df = calculate_rsi(df)
-                
-                latest_rsi = df['rsi'].iloc[-1]
-                latest_price = df['close'].iloc[-1]
+        print(f"Error initializing {exchange_id}: {e}")
+        return None
 
-                if 45 <= latest_rsi <= 60:
-                    results.append({
-                        'Coin': symbol,
-                        'Price ($)': round(latest_price, 4),
-                        'RSI (1H)': round(latest_rsi, 2)
-                    })
-        except Exception:
-            continue
-            
-        progress_bar.progress((idx + 1) / len(usdt_pairs))
+def fetch_top_usdt_pairs(exchange, limit=15):
+    """Fetch Top Volume USDT Spot Pairs"""
+    try:
+        tickers = exchange.fetch_tickers()
+        usdt_pairs = []
+        for symbol, ticker in tickers.items():
+            if symbol.endswith('/USDT') and 'quoteVolume' in ticker and ticker['quoteVolume']:
+                usdt_pairs.append((symbol, ticker['quoteVolume']))
         
-    return pd.DataFrame(results)
+        usdt_pairs.sort(key=lambda x: x[1], reverse=True)
+        return [pair[0] for pair in usdt_pairs[:limit]]
+    except Exception as e:
+        print(f"[{exchange.id.upper()}] Error fetching pairs: {e}")
+        return []
 
-if st.button('🚀 Start Scan'):
-    with st.spinner('Scanning Bitget Spot Markets...'):
-        df_results = scan_markets()
+def analyze_symbol(exchange, symbol):
+    """Fetch 5m OHLCV and Calculate EMA Crossover & Gap"""
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=150)
+        if not ohlcv or len(ohlcv) < 100:
+            return
+
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        if not df_results.empty:
-            st.success(f"{len(df_results)} Coins found in 45-60 RSI range!")
-            st.dataframe(df_results, use_container_width=True)
-        else:
-            st.warning("No coins found in 45-60 RSI range right now.")
-else:
-    st.info("Click 'Start Scan' to begin scanning Bitget markets.")
+        # Indicators
+        df['ema_fast'] = ta.ema(df['close'], length=EMA_FAST)
+        df['ema_slow'] = ta.ema(df['close'], length=EMA_SLOW)
+        
+        last_row = df.iloc[-1]
+        prev_row = df.iloc[-2]
+        
+        ema_fast_curr, ema_slow_curr = last_row['ema_fast'], last_row['ema_slow']
+        ema_fast_prev, ema_slow_prev = prev_row['ema_fast'], prev_row['ema_slow']
+        
+        # Signals
+        bullish_cross = (ema_fast_prev <= ema_slow_prev) and (ema_fast_curr > ema_slow_curr)
+        bearish_cross = (ema_fast_prev >= ema_slow_prev) and (ema_fast_curr < ema_slow_curr)
+        
+        gap_percent = abs(ema_fast_curr - ema_slow_curr) / ema_slow_curr * 100
+        close_gap = gap_percent <= GAP_THRESHOLD_PERCENT
+        
+        ex_name = exchange.id.upper()
+        price = last_row['close']
+
+        if bullish_cross:
+            print(f"🚀 [BUY CROSS]  | {ex_name:<8} | {symbol:<10} | Price: {price} | EMA14 crossed ABOVE EMA100")
+        elif bearish_cross:
+            print(f"🔻 [SELL CROSS] | {ex_name:<8} | {symbol:<10} | Price: {price} | EMA14 crossed BELOW EMA100")
+        elif close_gap:
+            print(f"⚠️  [GAP ALERT]  | {ex_name:<8} | {symbol:<10} | Price: {price} | Gap: {gap_percent:.2f}% (EMA14: {ema_fast_curr:.4f}, EMA100: {ema_slow_curr:.4f})")
+
+    except Exception:
+        pass
+
+def main():
+    print("=" * 70)
+    print(" MULTI-EXCHANGE 5m EMA 14/100 SCANNER INITIALIZED")
+    print("=" * 70)
+    
+    active_exchanges = {}
+    for ex_id in EXCHANGES:
+        inst = get_exchange_instance(ex_id)
+        if inst:
+            print(f"Fetching top pairs for {ex_id.upper()}...")
+            pairs = fetch_top_usdt_pairs(inst, limit=TOP_N_PAIRS)
+            if pairs:
+                active_exchanges[inst] = pairs
+                print(f"✓ Loaded {len(pairs)} pairs for {ex_id.upper()}")
+    
+    print("\nStarting Scanning Loop... Press Ctrl+C to Stop.\n")
+    
+    while True:
+        for exchange, pairs in active_exchanges.items():
+            for symbol in pairs:
+                analyze_symbol(exchange, symbol)
+                time.sleep(0.15)
+        
+        print("\n--- Scan Loop Complete. Refreshing in 30 seconds --- \n")
+        time.sleep(30)
+
+if __name__ == '__main__':
+    main()
+    
