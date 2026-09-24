@@ -1,1 +1,1 @@
-# Binanace-1hr-rsi
+# multi ex 14/100
