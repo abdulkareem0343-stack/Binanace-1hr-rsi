@@ -5,37 +5,80 @@ import time
 
 # Page Configuration
 st.set_page_config(
-    page_title="Crypto EMA Scanner (1000 Coins)",
+    page_title="Crypto EMA Scanner",
     page_icon="📈",
     layout="wide"
 )
 
-st.title("📈 Multi-Exchange EMA 14 / 100 Scanner")
-st.caption("5-Minute Timeframe Scanner for Crossovers and ≤ 0.3% Gap Thresholds")
+# Custom CSS for Mobile Responsive Cards Grid
+st.markdown("""
+<style>
+    .stButton>button {
+        width: 100%;
+        background-color: #0083B0;
+        color: white;
+        font-weight: bold;
+        border-radius: 8px;
+        padding: 10px;
+    }
+    .crypto-card {
+        border: 1px solid #333;
+        border-radius: 10px;
+        padding: 12px;
+        margin-bottom: 10px;
+        background-color: #1E1E1E;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+    }
+    .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid #444;
+        padding-bottom: 5px;
+        margin-bottom: 8px;
+    }
+    .symbol-title {
+        font-weight: bold;
+        font-size: 1.1em;
+        color: #FFFFFF;
+    }
+    .badge-buy { background-color: #28a745; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
+    .badge-sell { background-color: #dc3545; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
+    .badge-gap { background-color: #ffc107; color: black; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
+    .card-body { font-size: 0.85em; color: #BBB; line-height: 1.5; }
+</style>
+""", unsafe_allow_html=True)
 
-# Sidebar Configuration
-st.sidebar.header("Scanner Settings")
+st.title("📈 Multi-Exchange EMA Scanner")
+
+# Sidebar Filters
+st.sidebar.header("⚙️ Scanner Filters")
+
 EXCHANGES = st.sidebar.multiselect(
     "Select Exchanges",
     ['binance', 'bybit', 'okx', 'kucoin', 'mexc'],
     default=['binance']
 )
 
-# Slider Limit Upgraded to 1000 Coins
+# Timeframe Selection Added
+TIMEFRAME = st.sidebar.selectbox(
+    "Select Timeframe",
+    ['5m', '15m', '30m', '1h', '4h', '1d'],
+    index=0
+)
+
 TOP_N_PAIRS = st.sidebar.number_input(
-    "Number of Coins per Exchange (Up to 1000)", 
+    "Number of Coins per Exchange", 
     min_value=10, 
     max_value=1000, 
-    value=100, 
-    step=50
+    value=50, 
+    step=10
 )
 
 GAP_THRESHOLD = st.sidebar.number_input("Gap Threshold (%)", value=0.3, step=0.1)
-AUTO_REFRESH = st.sidebar.checkbox("Auto Refresh", value=False)
 
 EMA_FAST = 14
 EMA_SLOW = 100
-TIMEFRAME = '5m'
 
 @st.cache_resource
 def get_exchange_instance(exchange_id):
@@ -45,7 +88,7 @@ def get_exchange_instance(exchange_id):
     except Exception:
         return None
 
-def fetch_top_usdt_pairs(exchange, limit=1000):
+def fetch_top_usdt_pairs(exchange, limit=50):
     try:
         tickers = exchange.fetch_tickers()
         usdt_pairs = []
@@ -72,14 +115,13 @@ def scan_markets():
         if not exchange:
             continue
             
-        status_text.text(f"Fetching top {TOP_N_PAIRS} volume pairs for {ex_id.upper()}...")
+        status_text.text(f"Fetching top pairs for {ex_id.upper()}...")
         pairs = fetch_top_usdt_pairs(exchange, limit=TOP_N_PAIRS)
         total_pairs = len(pairs)
 
         for idx, symbol in enumerate(pairs):
-            # Progress bar update
             progress_bar.progress(min((idx + 1) / total_pairs, 1.0))
-            status_text.text(f"Scanning {ex_id.upper()} ({idx + 1}/{total_pairs}) -> {symbol}")
+            status_text.text(f"Scanning [{TIMEFRAME}] {ex_id.upper()} ({idx + 1}/{total_pairs}) -> {symbol}")
 
             try:
                 ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=150)
@@ -88,7 +130,7 @@ def scan_markets():
 
                 df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 
-                # Pure Pandas EMA Calculation
+                # EMA Calculation
                 df['ema_fast'] = df['close'].ewm(span=EMA_FAST, adjust=False).mean()
                 df['ema_slow'] = df['close'].ewm(span=EMA_SLOW, adjust=False).mean()
 
@@ -105,12 +147,17 @@ def scan_markets():
                 close_gap = gap_percent <= GAP_THRESHOLD
 
                 status = None
+                badge_class = ""
+                
                 if bullish_cross:
-                    status = "🚀 Bullish Crossover"
+                    status = "🚀 Bullish Cross"
+                    badge_class = "badge-buy"
                 elif bearish_cross:
-                    status = "🔻 Bearish Crossover"
+                    status = "🔻 Bearish Cross"
+                    badge_class = "badge-sell"
                 elif close_gap:
-                    status = "⚠️ Gap Alert"
+                    status = f"⚠️ Gap {gap_percent:.2f}%"
+                    badge_class = "badge-gap"
 
                 if status:
                     alerts.append({
@@ -118,12 +165,14 @@ def scan_markets():
                         "Symbol": symbol,
                         "Price": last_row['close'],
                         "Signal": status,
-                        "Gap (%)": round(gap_percent, 2),
-                        "EMA 14": round(ema_fast_curr, 4),
-                        "EMA 100": round(ema_slow_curr, 4)
+                        "Badge": badge_class,
+                        "Gap": round(gap_percent, 2),
+                        "EMA14": round(ema_fast_curr, 4),
+                        "EMA100": round(ema_slow_curr, 4),
+                        "Timeframe": TIMEFRAME
                     })
 
-                time.sleep(0.05)  # Dynamic delay to handle API limits
+                time.sleep(0.04)
             except Exception:
                 continue
 
@@ -131,20 +180,41 @@ def scan_markets():
     status_text.empty()
     return alerts
 
-# Execution
-if st.button("Start Scan") or 'initial' not in st.session_state:
-    st.session_state['initial'] = True
+# Button Press Control (Auto-scan disabled)
+start_scan = st.button("🚀 Start Scanning")
 
-with st.spinner("Scanning markets... Please wait."):
-    results = scan_markets()
+if start_scan:
+    with st.spinner("Scanning markets... Please wait."):
+        results = scan_markets()
+        st.session_state['scan_results'] = results
 
-if results:
-    st.success(f"Scan complete! Found {len(results)} active signals.")
-    df_results = pd.DataFrame(results)
-    st.dataframe(df_results, use_container_width=True)
+# Displaying Results in 3-Column Mobile Card Layout
+if 'scan_results' in st.session_state:
+    results = st.session_state['scan_results']
+    if results:
+        st.success(f"Found {len(results)} signals on {TIMEFRAME} timeframe!")
+        
+        # 3 Columns per row setup
+        cols = st.columns(3)
+        for idx, item in enumerate(results):
+            col = cols[idx % 3]  # Distribute cards in 3 columns
+            with col:
+                st.markdown(f"""
+                <div class="crypto-card">
+                    <div class="card-header">
+                        <span class="symbol-title">{item['Symbol']}</span>
+                        <span class="{item['Badge']}">{item['Signal']}</span>
+                    </div>
+                    <div class="card-body">
+                        <b>Ex:</b> {item['Exchange']} | <b>TF:</b> {item['Timeframe']}<br>
+                        <b>Price:</b> ${item['Price']}<br>
+                        <b>Gap:</b> {item['Gap']}%<br>
+                        <b>EMA14:</b> {item['EMA14']}<br>
+                        <b>EMA100:</b> {item['EMA100']}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+    else:
+        st.info("No signals found in the current scan.")
 else:
-    st.info("No crossover or narrow gap detected in current scan cycle.")
-
-if AUTO_REFRESH:
-    time.sleep(30)
-    st.rerun()
+    st.info("👈 Select options from sidebar and click 'Start Scanning' to run.")
