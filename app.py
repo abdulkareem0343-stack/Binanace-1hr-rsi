@@ -1,6 +1,5 @@
 import ccxt
 import pandas as pd
-import pandas_ta as ta
 import time
 
 # --- CONFIGURATION ---
@@ -39,7 +38,7 @@ def fetch_top_usdt_pairs(exchange, limit=15):
         return []
 
 def analyze_symbol(exchange, symbol):
-    """Fetch 5m OHLCV and Calculate EMA Crossover & Gap"""
+    """Fetch 5m OHLCV and Calculate EMA Crossover & Gap using Pure Pandas"""
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=150)
         if not ohlcv or len(ohlcv) < 100:
@@ -47,9 +46,9 @@ def analyze_symbol(exchange, symbol):
 
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         
-        # Indicators
-        df['ema_fast'] = ta.ema(df['close'], length=EMA_FAST)
-        df['ema_slow'] = ta.ema(df['close'], length=EMA_SLOW)
+        # Pure Pandas se EMA Calculation (Streamlit Crash Safe)
+        df['ema_fast'] = df['close'].ewm(span=EMA_FAST, adjust=False).mean()
+        df['ema_slow'] = df['close'].ewm(span=EMA_SLOW, adjust=False).mean()
         
         last_row = df.iloc[-1]
         prev_row = df.iloc[-2]
@@ -57,7 +56,7 @@ def analyze_symbol(exchange, symbol):
         ema_fast_curr, ema_slow_curr = last_row['ema_fast'], last_row['ema_slow']
         ema_fast_prev, ema_slow_prev = prev_row['ema_fast'], prev_row['ema_slow']
         
-        # Signals
+        # Signals Check
         bullish_cross = (ema_fast_prev <= ema_slow_prev) and (ema_fast_curr > ema_slow_curr)
         bearish_cross = (ema_fast_prev >= ema_slow_prev) and (ema_fast_curr < ema_slow_curr)
         
@@ -105,4 +104,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
