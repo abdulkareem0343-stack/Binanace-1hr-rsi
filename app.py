@@ -5,7 +5,7 @@ import time
 
 # Page Configuration
 st.set_page_config(
-    page_title="Crypto EMA Scanner",
+    page_title="Crypto EMA Scanner (1000 Coins)",
     page_icon="📈",
     layout="wide"
 )
@@ -18,11 +18,20 @@ st.sidebar.header("Scanner Settings")
 EXCHANGES = st.sidebar.multiselect(
     "Select Exchanges",
     ['binance', 'bybit', 'okx', 'kucoin', 'mexc'],
-    default=['binance', 'bybit', 'okx']
+    default=['binance']
 )
-TOP_N_PAIRS = st.sidebar.slider("Top Pairs per Exchange", min_value=5, max_value=30, value=10)
+
+# Slider Limit Upgraded to 1000 Coins
+TOP_N_PAIRS = st.sidebar.number_input(
+    "Number of Coins per Exchange (Up to 1000)", 
+    min_value=10, 
+    max_value=1000, 
+    value=100, 
+    step=50
+)
+
 GAP_THRESHOLD = st.sidebar.number_input("Gap Threshold (%)", value=0.3, step=0.1)
-AUTO_REFRESH = st.sidebar.checkbox("Auto Refresh (Every 30s)", value=True)
+AUTO_REFRESH = st.sidebar.checkbox("Auto Refresh", value=False)
 
 EMA_FAST = 14
 EMA_SLOW = 100
@@ -36,7 +45,7 @@ def get_exchange_instance(exchange_id):
     except Exception:
         return None
 
-def fetch_top_usdt_pairs(exchange, limit=10):
+def fetch_top_usdt_pairs(exchange, limit=1000):
     try:
         tickers = exchange.fetch_tickers()
         usdt_pairs = []
@@ -58,21 +67,19 @@ def scan_markets():
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    total_steps = len(EXCHANGES) * TOP_N_PAIRS
-    current_step = 0
-
     for ex_id in EXCHANGES:
         exchange = get_exchange_instance(ex_id)
         if not exchange:
             continue
             
-        status_text.text(f"Fetching top pairs for {ex_id.upper()}...")
+        status_text.text(f"Fetching top {TOP_N_PAIRS} volume pairs for {ex_id.upper()}...")
         pairs = fetch_top_usdt_pairs(exchange, limit=TOP_N_PAIRS)
+        total_pairs = len(pairs)
 
-        for symbol in pairs:
-            current_step += 1
-            progress_bar.progress(min(current_step / total_steps, 1.0))
-            status_text.text(f"Scanning {ex_id.upper()} -> {symbol}")
+        for idx, symbol in enumerate(pairs):
+            # Progress bar update
+            progress_bar.progress(min((idx + 1) / total_pairs, 1.0))
+            status_text.text(f"Scanning {ex_id.upper()} ({idx + 1}/{total_pairs}) -> {symbol}")
 
             try:
                 ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=150)
@@ -81,7 +88,7 @@ def scan_markets():
 
                 df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 
-                # Pure Pandas EMA Calculations
+                # Pure Pandas EMA Calculation
                 df['ema_fast'] = df['close'].ewm(span=EMA_FAST, adjust=False).mean()
                 df['ema_slow'] = df['close'].ewm(span=EMA_SLOW, adjust=False).mean()
 
@@ -116,7 +123,7 @@ def scan_markets():
                         "EMA 100": round(ema_slow_curr, 4)
                     })
 
-                time.sleep(0.1)  # Avoid rate limits
+                time.sleep(0.05)  # Dynamic delay to handle API limits
             except Exception:
                 continue
 
@@ -125,14 +132,14 @@ def scan_markets():
     return alerts
 
 # Execution
-if st.button("Manual Scan Now") or 'initial' not in st.session_state:
+if st.button("Start Scan") or 'initial' not in st.session_state:
     st.session_state['initial'] = True
 
 with st.spinner("Scanning markets... Please wait."):
     results = scan_markets()
 
 if results:
-    st.success(f"Found {len(results)} active signals!")
+    st.success(f"Scan complete! Found {len(results)} active signals.")
     df_results = pd.DataFrame(results)
     st.dataframe(df_results, use_container_width=True)
 else:
